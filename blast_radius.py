@@ -52,6 +52,25 @@ TIER_1_ROLES = {
 # lower number = worse
 TIER_RANK = {"TIER0": 0, "TIER1": 1, "TIER2": 2}
 
+# App (Graph) permissions that make OWNING an app dangerous. Owning an app
+# means controlling what it can do - so an owned app holding one of these is
+# effectively that level of access for the owner, regardless of their roles.
+APP_TIER0 = {
+    "Application.ReadWrite.All",
+    "AppRoleAssignment.ReadWrite.All",
+    "RoleManagement.ReadWrite.Directory",
+    "Directory.ReadWrite.All",
+    "PrivilegedAccess.ReadWrite.AzureADGroup",
+}
+APP_TIER1 = {
+    "Mail.Read", "Mail.ReadWrite", "Mail.Send",
+    "Files.Read.All", "Files.ReadWrite.All",
+    "Sites.Read.All", "Sites.ReadWrite.All",
+    "User.ReadWrite.All",
+    "Group.ReadWrite.All",
+    "Chat.Read.All", "ChannelMessage.Read.All",
+}
+
 
 def _tier(role_name):
     if role_name in TIER_0_ROLES:
@@ -210,13 +229,85 @@ class BlastRadius:
         return out
 
     async def owned_apps(self, principal_id):
-        """Applications the principal owns, and the app permissions that
-        make ownership dangerous."""
-        rows = await self._get_json(
+        """Applications the principal owns, with the granted app permissions
+        that make ownership dangerous.
+
+        Owning an app means controlling its permissions. An owned app holding
+        a tier-0 Graph permission (e.g. RoleManagement.ReadWrite.Directory) is
+        effectively tenant takeover for the owner, even if the owner holds no
+        such role directly. That is the cross-dimension reach blast radius must
+        surface.
+        """
+        apps = await self._get_json(
             f"https://graph.microsoft.com/v1.0/users/{principal_id}"
             "/ownedObjects/microsoft.graph.application?$select=id,displayName,appId"
         )
-        return [{"app": a.get("displayName", "Unknown app"), "app_id": a.get("appId")} for a in rows]
+        out = []
+        for a in apps:
+            app_id = a.get("appId")
+            perms = await self._app_permissions(app_id)
+            tier0 = sorted(perms & APP_TIER0)
+            tier1 = sorted(perms & APP_TIER1)
+            worst = "TIER0" if tier0 else ("TIER1" if tier1 else "TIER2")
+            out.append({
+                "app": a.get("displayName", "Unknown app"),
+                "app_id": app_id,
+                "tier0_perms": tier0,
+                "tier1_perms": tier1,
+                "worst": worst,
+            })
+        return out
+
+    async def _app_permissions(self, app_id):
+        """Resolve the Graph application permissions actually granted to an
+        app's service principal, returning the permission value strings.
+
+        The SP's appRoleAssignments reference (resourceId, appRoleId); the
+        permission name lives in the RESOURCE SP's appRoles list. We resolve
+        the pair to the human permission value (e.g. "Mail.Read").
+        """
+        if not app_id:
+            return set()
+        # find the app's own service principal by appId
+        sps = await self._get_json(
+            "https://graph.microsoft.com/v1.0/servicePrincipals"
+            f"?$filter=appId eq '{app_id}'&$select=id,appId,displayName"
+        )
+        if not sps:
+            return set()
+        sp_oid = sps[0]["id"]
+        assignments = await self._get_json(
+            f"https://graph.microsoft.com/v1.0/servicePrincipals/{sp_oid}/appRoleAssignments"
+        )
+        perms = set()
+        # cache resource SP appRoles so we resolve appRoleId -> value
+        role_cache = {}
+        for a in assignments:
+            resource_id = a.get("resourceId")
+            role_id = a.get("appRoleId")
+            if not resource_id or not role_id:
+                continue
+            if resource_id not in role_cache:
+                res = await self._get_json(
+                    f"https://graph.microsoft.com/v1.0/servicePrincipals/{resource_id}?$select=appRoles"
+                )
+                # _get_json returns a list of 'value' rows; a single object
+                # response has no 'value', so fetch directly instead
+                role_cache[resource_id] = await self._sp_app_roles(resource_id)
+            roles = role_cache[resource_id]
+            perms.add(roles.get(role_id, role_id))
+        return perms
+
+    async def _sp_app_roles(self, sp_oid):
+        """Map appRoleId -> permission value for a service principal."""
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        url = f"https://graph.microsoft.com/v1.0/servicePrincipals/{sp_oid}?$select=appRoles"
+        async with aiohttp.ClientSession() as s:
+            async with s.get(url, headers=headers) as r:
+                if r.status != 200:
+                    return {}
+                data = await r.json()
+        return {role["id"]: role.get("value", role["id"]) for role in data.get("appRoles", [])}
 
     # --- top-level compute ---
 
@@ -253,11 +344,18 @@ class BlastRadius:
 
         unique_roles.sort(key=lambda r: (TIER_RANK.get(r["tier"], 9), r["kind"] != "active"))
 
+        # Overall worst reachable considers roles AND owned-app permissions.
+        worst_role_tier = min((TIER_RANK[r["tier"]] for r in unique_roles), default=9)
+        worst_app_tier = min((TIER_RANK[a["worst"]] for a in apps), default=9)
+        overall = min(worst_role_tier, worst_app_tier)
+
         return {
             "principal": {"id": pid, "name": pname},
             "groups": group_ids,
             "roles": unique_roles,
             "apps": apps,
+            "overall_tier": overall,
+            "worst_via_app": worst_app_tier < worst_role_tier,
         }
 
 
@@ -273,15 +371,30 @@ def _print_report(result):
     print(f"BLAST RADIUS: {p['name']}")
     print("=" * 64)
 
-    # headline: worst reachable thing
-    worst = roles[0] if roles else None
-    if worst and worst["tier"] == "TIER0":
-        print(f"{Fore.RED}!! Reaches FULL TENANT CONTROL: {worst['role']} "
-              f"({'held' if worst['kind']=='active' else 'PIM-eligible'} via {worst['via']}){Style.RESET_ALL}")
-    elif worst:
+    overall = result.get("overall_tier", 9)
+    via_app = result.get("worst_via_app", False)
+    tier0_apps = [a for a in apps if a["worst"] == "TIER0"]
+
+    # headline: worst reachable across roles AND owned apps
+    if overall == 0:
+        if via_app and tier0_apps:
+            a = tier0_apps[0]
+            perm = a["tier0_perms"][0] if a["tier0_perms"] else "tier-0 permission"
+            print(f"{Fore.RED}!! Reaches FULL TENANT CONTROL via OWNED APP "
+                  f"'{a['app']}' ({perm}){Style.RESET_ALL}")
+            print(f"{Fore.RED}   (owner holds no tier-0 role directly - the reach is through the app){Style.RESET_ALL}")
+        else:
+            worst = roles[0]
+            print(f"{Fore.RED}!! Reaches FULL TENANT CONTROL: {worst['role']} "
+                  f"({'held' if worst['kind']=='active' else 'PIM-eligible'} via {worst['via']}){Style.RESET_ALL}")
+    elif roles:
+        worst = roles[0]
         print(f"{Fore.YELLOW}Worst reachable: {worst['role']} via {worst['via']}{Style.RESET_ALL}")
+    elif tier0_apps:
+        a = tier0_apps[0]
+        print(f"{Fore.RED}!! Reaches FULL TENANT CONTROL via OWNED APP '{a['app']}'{Style.RESET_ALL}")
     else:
-        print("No privileged roles reachable.")
+        print("No privileged roles or dangerous owned apps reachable.")
 
     print(f"\nReach: {len(groups)} groups, {len(roles)} role assignments, {len(apps)} owned apps\n")
 
@@ -294,8 +407,15 @@ def _print_report(result):
 
     if apps:
         print("\nOwned applications (own the app = control its permissions):")
-        for a in apps:
-            print(f"  - {a['app']}")
+        for a in sorted(apps, key=lambda x: TIER_RANK.get(x["worst"], 9)):
+            if a["tier0_perms"]:
+                print(f"  {Fore.RED}[T0]{Style.RESET_ALL} {a['app']:32} "
+                      f"holds {', '.join(a['tier0_perms'])}")
+            elif a["tier1_perms"]:
+                print(f"  {Fore.YELLOW}[T1]{Style.RESET_ALL} {a['app']:32} "
+                      f"holds {', '.join(a['tier1_perms'])}")
+            else:
+                print(f"       {a['app']}")
 
     if groups:
         print(f"\nGroup memberships ({len(groups)}, nesting included):")
