@@ -98,6 +98,10 @@ class BlastRadius:
         self.credential = None
         self.client = None
         self.access_token = None
+        # caches so tenant-wide runs don't re-fetch shared data per user
+        self._group_roles_cache = {}   # group_id -> [role dicts]
+        self._app_perms_cache = {}     # app_id  -> {tier0, tier1, worst}
+        self._pim_by_principal = None  # principalId -> [role dicts], fetched once
 
     async def connect(self):
         print(f"{Fore.YELLOW}Connecting to Microsoft Graph...{Style.RESET_ALL}")
@@ -190,42 +194,48 @@ class BlastRadius:
 
     async def group_role_assignments(self, group_ids):
         """Roles held by any of the principal's groups -> reachable by the
-        principal through that group membership."""
+        principal through that group membership. Cached per group."""
         out = []
         for gid, gname in group_ids:
-            url = (
-                "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments"
-                f"?$filter=principalId eq '{gid}'&$expand=roleDefinition"
-            )
-            rows = await self._get_json(url)
-            for a in rows:
-                rd = a.get("roleDefinition") or {}
-                out.append({
-                    "role": rd.get("displayName", "Unknown role"),
-                    "via": f"group:{gname}",
-                    "kind": "active",
-                })
+            if gid not in self._group_roles_cache:
+                url = (
+                    "https://graph.microsoft.com/v1.0/roleManagement/directory/roleAssignments"
+                    f"?$filter=principalId eq '{gid}'&$expand=roleDefinition"
+                )
+                rows = await self._get_json(url)
+                self._group_roles_cache[gid] = [
+                    (a.get("roleDefinition") or {}).get("displayName", "Unknown role")
+                    for a in rows
+                ]
+            for role_name in self._group_roles_cache[gid]:
+                out.append({"role": role_name, "via": f"group:{gname}", "kind": "active"})
         return out
 
-    async def pim_eligible(self, principal_id, group_ids):
-        """PIM-eligible roles for the principal directly, or via a group."""
-        ids = {principal_id: "direct"}
-        for gid, gname in group_ids:
-            ids[gid] = f"group:{gname}"
-        out = []
+    async def _load_pim(self):
+        """Fetch all PIM-eligible schedules once, index by principalId."""
+        if self._pim_by_principal is not None:
+            return
+        self._pim_by_principal = {}
         rows = await self._get_json(
             "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilitySchedules"
             "?$expand=roleDefinition"
         )
         for a in rows:
             pid = a.get("principalId")
-            if pid in ids:
-                rd = a.get("roleDefinition") or {}
-                out.append({
-                    "role": rd.get("displayName", "Unknown role"),
-                    "via": ids[pid],
-                    "kind": "eligible",
-                })
+            rd = a.get("roleDefinition") or {}
+            self._pim_by_principal.setdefault(pid, []).append(rd.get("displayName", "Unknown role"))
+
+    async def pim_eligible(self, principal_id, group_ids):
+        """PIM-eligible roles for the principal directly, or via a group.
+        Uses the once-loaded PIM index."""
+        await self._load_pim()
+        ids = {principal_id: "direct"}
+        for gid, gname in group_ids:
+            ids[gid] = f"group:{gname}"
+        out = []
+        for pid, via in ids.items():
+            for role_name in self._pim_by_principal.get(pid, []):
+                out.append({"role": role_name, "via": via, "kind": "eligible"})
         return out
 
     async def owned_apps(self, principal_id):
@@ -245,10 +255,16 @@ class BlastRadius:
         out = []
         for a in apps:
             app_id = a.get("appId")
-            perms = await self._app_permissions(app_id)
-            tier0 = sorted(perms & APP_TIER0)
-            tier1 = sorted(perms & APP_TIER1)
-            worst = "TIER0" if tier0 else ("TIER1" if tier1 else "TIER2")
+            if app_id not in self._app_perms_cache:
+                perms = await self._app_permissions(app_id)
+                t0 = sorted(perms & APP_TIER0)
+                t1 = sorted(perms & APP_TIER1)
+                self._app_perms_cache[app_id] = {
+                    "tier0": t0, "tier1": t1,
+                    "worst": "TIER0" if t0 else ("TIER1" if t1 else "TIER2"),
+                }
+            cached = self._app_perms_cache[app_id]
+            tier0, tier1, worst = cached["tier0"], cached["tier1"], cached["worst"]
             out.append({
                 "app": a.get("displayName", "Unknown app"),
                 "app_id": app_id,
@@ -359,6 +375,89 @@ class BlastRadius:
         }
 
 
+    async def all_users(self):
+        """Fetch all users in the tenant (id + name + UPN)."""
+        return await self._get_json(
+            "https://graph.microsoft.com/v1.0/users?$select=id,displayName,userPrincipalName&$top=999"
+        )
+
+    async def compute_tenant(self, top_n=10):
+        """Compute blast radius for every user, return the worst top_n.
+
+        This computes everyone (caches make shared lookups cheap), ranks by
+        overall tier then by reach size, and returns the top_n most dangerous.
+        """
+        users = await self.all_users()
+        print(f"{Fore.CYAN}Computing blast radius for {len(users)} users "
+              f"(cached shared lookups)...{Style.RESET_ALL}")
+        results = []
+        for i, u in enumerate(users, 1):
+            uid = u.get("id")
+            if not uid:
+                continue
+            res = await self._compute_for_id(uid, u.get("displayName", "Unknown"))
+            if res:
+                results.append(res)
+            if i % 25 == 0:
+                print(f"  ...{i}/{len(users)}")
+        # rank: worst overall tier first, then most reach (roles+apps)
+        def _reach_size(r):
+            return len(r["roles"]) + sum(1 for a in r["apps"] if a["worst"] != "TIER2")
+        results.sort(key=lambda r: (r.get("overall_tier", 9), -_reach_size(r)))
+        return results[:top_n], len(users)
+
+    async def _compute_for_id(self, uid, uname):
+        """compute() variant that takes an already-resolved id+name."""
+        groups = await self.transitive_groups(uid)
+        group_ids = [(g["id"], g.get("displayName", "Unknown group")) for g in groups]
+        direct_roles = await self.direct_role_assignments(uid)
+        group_roles = await self.group_role_assignments(group_ids)
+        eligible = await self.pim_eligible(uid, group_ids)
+        apps = await self.owned_apps(uid)
+        roles = direct_roles + group_roles + eligible
+        seen, unique_roles = set(), []
+        for r in roles:
+            key = (r["role"], r["via"], r["kind"])
+            if key not in seen:
+                seen.add(key); unique_roles.append(r)
+        for r in unique_roles:
+            r["tier"] = _tier(r["role"])
+        unique_roles.sort(key=lambda r: (TIER_RANK.get(r["tier"], 9), r["kind"] != "active"))
+        worst_role_tier = min((TIER_RANK[r["tier"]] for r in unique_roles), default=9)
+        worst_app_tier = min((TIER_RANK[a["worst"]] for a in apps), default=9)
+        overall = min(worst_role_tier, worst_app_tier)
+        return {
+            "principal": {"id": uid, "name": uname},
+            "groups": group_ids, "roles": unique_roles, "apps": apps,
+            "overall_tier": overall,
+            "worst_via_app": worst_app_tier < worst_role_tier,
+        }
+
+
+def _tier_label(t):
+    return {0: "FULL TENANT CONTROL", 1: "tier-1 privilege", 2: "limited", 9: "none"}.get(t, "unknown")
+
+
+def _print_tenant(results, total):
+    print("\n" + "=" * 64)
+    print(f"TENANT BLAST RADIUS - top {len(results)} of {total} users")
+    print("=" * 64)
+    for i, r in enumerate(results, 1):
+        p = r["principal"]
+        t = r.get("overall_tier", 9)
+        via_app = r.get("worst_via_app", False)
+        tier0_apps = [a for a in r["apps"] if a["worst"] == "TIER0"]
+        if t == 0 and via_app and tier0_apps:
+            verdict = f"reaches FULL TENANT CONTROL via owned app '{tier0_apps[0]['app']}'"
+        elif t == 0:
+            verdict = f"reaches FULL TENANT CONTROL: {r['roles'][0]['role']}"
+        elif t == 1:
+            verdict = f"reaches {r['roles'][0]['role']}" if r["roles"] else "reaches tier-1"
+        else:
+            verdict = "limited reach"
+        print(f"  {i:2}. {p['name']:24} {verdict}")
+    print()
+
 def _print_report(result):
     if not result:
         return
@@ -428,14 +527,42 @@ def _print_report(result):
 
 async def main():
     import sys
-    if len(sys.argv) < 2:
-        print("Usage: python blast_radius.py <UPN-or-object-id>")
-        return
-    identifier = sys.argv[1]
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    flags = [a for a in sys.argv[1:] if a.startswith("-")]
+
     br = BlastRadius()
     await br.connect()
+
+    # tenant-wide mode: rank all users, show top N
+    if "--tenant" in flags:
+        top_n = 10
+        for f in flags:
+            if f.startswith("--top="):
+                try:
+                    top_n = int(f.split("=", 1)[1])
+                except ValueError:
+                    pass
+        results, total = await br.compute_tenant(top_n=top_n)
+        _print_tenant(results, total)
+        if "--html" in flags:
+            from br_report import render_tenant
+            out = render_tenant(results, total)
+            print(f"\nHTML report written to {out}")
+        return
+
+    # single-user mode
+    if not args:
+        print("Usage:")
+        print("  python blast_radius.py <UPN-or-object-id> [--html]   # one identity")
+        print("  python blast_radius.py --tenant [--top=N] [--html]   # rank all users")
+        return
+    identifier = args[0]
     result = await br.compute(identifier)
     _print_report(result)
+    if "--html" in flags and result:
+        from br_report import render_html
+        out = render_html(result)
+        print(f"\nHTML report written to {out}")
 
 
 if __name__ == "__main__":
