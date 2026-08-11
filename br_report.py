@@ -12,17 +12,25 @@ from datetime import datetime, timezone
 
 _CSS = """
 :root {
-  --bg: #ffffff; --card: #fff; --border: #e5e7eb;
+  --bg: #f8f9fa; --card: #fff; --border: #e5e7eb;
   --text: #0f172a; --muted: #64748b;
-  --crit: #ff0000; --crit-bg: #ffb3b3;
-  --high: #ff7a00; --high-bg: #ffcc99;
-  --ok: #16a34a; --ok-bg: #bbf7d0;
+  --crit: #dc2626; --crit-bg: #fee2e2; --crit-light: #fef2f2;
+  --high: #d97706; --high-bg: #fef3c7; --high-light: #fffbeb;
+  --med: #6366f1; --med-bg: #e0e7ff; --med-light: #eef2ff;
+  --ok: #16a34a; --ok-bg: #dcfce7;
   --step-bg: #ffffff; --step-border: #d9dee5;
+  --header-bg: #1e293b;
+  --active-tab: #3b82f6;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.45; }
-main { max-width: 900px; margin: 0 auto; padding: 2.5rem 1.5rem; }
+.header { background: var(--header-bg); color: #fff; padding: 2rem 1.5rem 1.6rem; margin-bottom: 1.5rem; }
+.header-inner { max-width: 900px; margin: 0 auto; }
+.header h1 { font-size: 1.8rem; margin: 0 0 .25rem; color: #fff; }
+.header .subtitle { color: #94a3b8; margin: 0 0 .15rem; font-size: .95rem; }
+.header .ts { color: #64748b; font-size: .82rem; margin: 0; }
+main { max-width: 900px; margin: 0 auto; padding: 1rem 1.5rem 2.5rem; }
 h1 { font-size: 1.8rem; margin: 0 0 .2rem; }
 .subtitle { color: var(--muted); margin: 0 0 .1rem; }
 .ts { color: var(--muted); font-size: .85rem; margin: 0 0 1.5rem; }
@@ -36,17 +44,19 @@ h2.section { font-size: 1.1rem; margin: 2rem 0 .9rem; padding-bottom: .35rem; bo
 .verdict.ok .label { color: #14532d; }
 .verdict .headline { font-size: 1.35rem; font-weight: 800; margin: .3rem 0 0; }
 .verdict .sub { color: #334155; font-size: .95rem; margin-top: .4rem; }
-.reach { display: flex; gap: 2rem; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.4rem; margin-bottom: 1rem; }
-.reach .n { font-size: 1.6rem; font-weight: 700; display: block; line-height: 1; }
-.reach .l { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.stats { display: flex; justify-content: center; gap: 3rem; flex-wrap: wrap; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.2rem 1.6rem; margin-bottom: 1.2rem; }
+.stat { text-align: center; }
+.stat .n { font-size: 1.8rem; font-weight: 700; display: block; line-height: 1.2; }
+.stat .l { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; display: block; margin-top: .2rem; }
 .card { background: var(--card); border: 1px solid var(--border); border-left: 6px solid var(--border); border-radius: 12px; padding: .9rem 1.2rem; margin-bottom: .8rem; }
 .card.t0 { background: var(--crit-bg); border-left-color: var(--crit); }
 .card.t1 { background: var(--high-bg); border-left-color: var(--high); }
+.card.t2 { background: var(--med-bg); border-left-color: var(--med); }
 .card-head { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
 .badge { color: #fff; font-size: .68rem; font-weight: 700; letter-spacing: .05em; padding: .16rem .5rem; border-radius: 999px; text-transform: uppercase; }
 .badge.t0 { background: var(--crit); }
 .badge.t1 { background: var(--high); }
-.badge.t2 { background: var(--muted); }
+.badge.t2 { background: var(--med); }
 .name { font-size: 1.05rem; font-weight: 700; }
 .perm-tag { font-family: ui-monospace, Menlo, monospace; font-size: .76rem; background: rgba(0,0,0,0.07); padding: .12rem .45rem; border-radius: 5px; }
 .via { margin-left: auto; font-size: .78rem; color: #475569; background: rgba(255,255,255,0.7); border: 1px solid var(--step-border); padding: .14rem .5rem; border-radius: 999px; white-space: nowrap; }
@@ -54,17 +64,27 @@ h2.section { font-size: 1.1rem; margin: 2rem 0 .9rem; padding-bottom: .35rem; bo
 .groups { display: flex; flex-wrap: wrap; gap: .4rem; }
 .group-chip { background: var(--step-bg); border: 1px solid var(--step-border); border-radius: 6px; padding: .28rem .55rem; font-size: .82rem; }
 .empty { color: var(--muted); padding: 1rem; }
-.rank-card { background: var(--card); border: 1px solid var(--border); border-left: 6px solid var(--border); border-radius: 12px; margin-bottom: .7rem; overflow: hidden; }
-.rank-card.crit { border-left-color: var(--crit); }
-.rank-card.high { border-left-color: var(--high); }
-.rank-card.ok { border-left-color: var(--ok); }
+.rank-card { background: var(--card); border: 1px solid var(--border); border-left: 8px solid var(--border); border-radius: 12px; margin-bottom: .7rem; overflow: hidden; transition: box-shadow .15s, background .15s; }
+.rank-card.crit { border-left-color: var(--crit); background: var(--crit-light); }
+.rank-card.high { border-left-color: var(--high); background: var(--high-light); }
+.rank-card.ok { border-left-color: var(--ok); background: #f7fdf9; }
+.rank-card.open { box-shadow: 0 4px 12px rgba(0,0,0,0.1); border-left-color: var(--active-tab); border-color: #60a5fa; background: #f8fafc; }
+.rank-card.open.crit { background: #f8fafc; }
+.rank-card.open.high { background: #f8fafc; }
+.rank-card.open.ok { background: #f8fafc; }
 .rank-head { display: flex; align-items: center; gap: .8rem; padding: .9rem 1.2rem; cursor: pointer; user-select: none; }
-.rank-head:hover { background: rgba(0,0,0,0.02); }
-.rank-num { font-size: 1.1rem; font-weight: 800; color: var(--muted); min-width: 1.8rem; }
+.rank-head:hover { background: rgba(0,0,0,0.04); }
+.rank-head:hover .expand-hint { opacity: 1; }
+.rank-num { font-size: 1.1rem; font-weight: 800; min-width: 1.8rem; }
+.rank-card.crit .rank-num { color: var(--crit); }
+.rank-card.high .rank-num { color: var(--high); }
+.rank-card.ok .rank-num { color: var(--ok); }
 .rank-name { font-size: 1.05rem; font-weight: 700; }
 .rank-verdict { color: #334155; font-size: .9rem; }
 .rank-card.crit .rank-verdict { color: #7f1d1d; font-weight: 600; }
-.chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
+.expand-hint { font-size: .75rem; color: var(--muted); opacity: 0.6; transition: opacity .15s; margin-left: auto; }
+.rank-card.open .expand-hint { display: none; }
+.chev { color: var(--muted); transition: transform .15s; font-size: 1.1rem; }
 .rank-card.open .chev { transform: rotate(90deg); }
 .rank-detail { display: none; padding: .3rem 1.2rem 1.2rem; border-top: 1px solid var(--border); }
 .rank-card.open .rank-detail { display: block; }
@@ -110,7 +130,7 @@ def _role_cards(roles):
     out = ""
     for r in roles:
         bcls, btxt = _TIER_BADGE[r["tier"]]
-        cardcls = bcls if r["tier"] != "TIER2" else ""
+        cardcls = bcls
         kind = "held" if r["kind"] == "active" else "PIM-eligible"
         out += ('<div class="card ' + cardcls + '"><div class="card-head">'
                 '<span class="badge ' + bcls + '">' + btxt + '</span>'
@@ -127,7 +147,7 @@ def _app_cards(apps):
     out = ""
     order = {"TIER0": 0, "TIER1": 1, "TIER2": 2}
     for a in sorted(apps, key=lambda x: order.get(x["worst"], 9)):
-        cls = "t0" if a["tier0_perms"] else ("t1" if a["tier1_perms"] else "")
+        cls = "t0" if a["tier0_perms"] else ("t1" if a["tier1_perms"] else "t2")
         bcls, btxt = _TIER_BADGE[a["worst"]]
         perms = a["tier0_perms"] + a["tier1_perms"]
         perm_tags = "".join('<span class="perm-tag">' + escape(x) + "</span> " for x in perms)
@@ -164,19 +184,22 @@ def render_html(result, output_path="blast_radius_report.html"):
 
     html = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Blast Radius - " + escape(p["name"]) + "</title>"
-            "<style>" + _CSS + "</style></head><body><main>"
+            "<style>" + _CSS + "</style></head><body>"
+            "<div class=\"header\"><div class=\"header-inner\">"
             "<h1>Blast Radius</h1>"
             "<p class=\"subtitle\">" + escape(p["name"]) + "</p>"
             "<p class=\"ts\">" + ts + "</p>"
+            "</div></div>"
+            "<main>"
             "<div class=\"verdict " + vclass + "\">"
             "<div class=\"label\">" + escape(vlabel) + "</div>"
             "<div class=\"headline\">" + headline + "</div>"
             + (('<div class="sub">' + sub + "</div>") if sub else "")
             + "</div>"
-            "<div class=\"reach\">"
-            "<div><span class=\"n\">" + str(len(roles)) + "</span><span class=\"l\">reachable roles</span></div>"
-            "<div><span class=\"n\">" + str(len(apps)) + "</span><span class=\"l\">owned apps</span></div>"
-            "<div><span class=\"n\">" + str(len(groups)) + "</span><span class=\"l\">groups (nested incl.)</span></div>"
+            "<div class=\"stats\">"
+            "<div class=\"stat\"><span class=\"n\">" + str(len(roles)) + "</span><span class=\"l\">Reachable Roles</span></div>"
+            "<div class=\"stat\"><span class=\"n\">" + str(len(apps)) + "</span><span class=\"l\">Owned Apps</span></div>"
+            "<div class=\"stat\"><span class=\"n\">" + str(len(groups)) + "</span><span class=\"l\">Groups</span></div>"
             "</div>"
             + _detail_body(result)
             + "</main></body></html>")
@@ -194,28 +217,46 @@ def render_tenant(results, total, output_path="blast_radius_tenant.html"):
     for i, r in enumerate(results, 1):
         vclass, vlabel, headline, sub = _verdict_bits(r)
         p = r["principal"]
-        cards += ('<div class="rank-card ' + vclass + '" onclick="this.classList.toggle(\'open\')">'
+        open_cls = " open" if i == 1 else ""
+        cards += ('<div class="rank-card ' + vclass + open_cls + '" onclick="this.classList.toggle(\'open\')">'
                   '<div class="rank-head">'
                   '<span class="rank-num">' + str(i) + '</span>'
                   '<span class="rank-name">' + escape(p["name"]) + '</span>'
                   '<span class="rank-verdict">' + headline + '</span>'
+                  '<span class="expand-hint">click to expand</span>'
                   '<span class="chev">&#9656;</span>'
                   '</div>'
                   '<div class="rank-detail">' + _detail_body(r) + '</div>'
                   '</div>')
 
+    high_count = sum(1 for r in results if r.get("overall_tier", 9) == 1)
+
     html = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Tenant Blast Radius</title>"
-            "<style>" + _CSS + "</style></head><body><main>"
+            "<style>" + _CSS + "</style></head><body>"
+            "<div class=\"header\"><div class=\"header-inner\">"
             "<h1>Tenant Blast Radius</h1>"
             "<p class=\"subtitle\">Top " + str(len(results)) + " most dangerous identities of " + str(total) + " users</p>"
             "<p class=\"ts\">" + ts + "</p>"
-            "<div class=\"reach\">"
-            "<div><span class=\"n\" style=\"color:var(--crit)\">" + str(crit_count) + "</span><span class=\"l\">reach full tenant control</span></div>"
-            "<div><span class=\"n\">" + str(len(results)) + "</span><span class=\"l\">shown</span></div>"
-            "<div><span class=\"n\">" + str(total) + "</span><span class=\"l\">total users</span></div>"
+            "</div></div>"
+            "<main>"
+            "<div class=\"stats\">"
+            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--crit)\">" + str(crit_count) + "</span><span class=\"l\">Critical</span></div>"
+            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--high)\">" + str(high_count) + "</span><span class=\"l\">High</span></div>"
+            "<div class=\"stat\"><span class=\"n\">" + str(len(results)) + "</span><span class=\"l\">Shown</span></div>"
+            "<div class=\"stat\"><span class=\"n\">" + str(total) + "</span><span class=\"l\">Total Users</span></div>"
             "</div>"
-            "<p style=\"color:var(--muted);font-size:.85rem;margin:.5rem 0 1.5rem\">Click any identity to expand its full reachable set.</p>"
+            "<div style=\"background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem 1.4rem;margin-bottom:1rem\">"
+            "<div style=\"display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.82rem;color:var(--text);align-items:center;margin-bottom:.6rem\">"
+            "<span style=\"display:inline-flex;align-items:center;gap:.4rem\"><span style=\"width:10px;height:10px;border-radius:50%;background:var(--crit);display:inline-block\"></span> <strong>T0</strong> Critical &mdash; full tenant control</span>"
+            "<span style=\"display:inline-flex;align-items:center;gap:.4rem\"><span style=\"width:10px;height:10px;border-radius:50%;background:var(--high);display:inline-block\"></span> <strong>T1</strong> High &mdash; broad privileged access</span>"
+            "<span style=\"display:inline-flex;align-items:center;gap:.4rem\"><span style=\"width:10px;height:10px;border-radius:50%;background:var(--med);display:inline-block\"></span> <strong>T2</strong> Medium &mdash; limited access</span>"
+            "</div>"
+            "<div style=\"display:flex;gap:1.5rem;flex-wrap:wrap;font-size:.8rem;color:var(--muted);align-items:center\">"
+            "<span style=\"display:inline-flex;align-items:center;gap:.4rem\"><span style=\"width:10px;height:3px;background:var(--active-tab);display:inline-block;border-radius:2px\"></span> expanded card</span>"
+            "</div>"
+            "</div>"
+            "<div style=\"text-align:center;color:var(--text);font-size:.9rem;font-weight:600;margin:0 0 1.2rem\">&#9662; Click any card to expand its full reachable set</div>"
             + cards
             + "</main></body></html>")
 
