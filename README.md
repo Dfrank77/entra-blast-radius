@@ -1,6 +1,8 @@
 # entra-blast-radius
 
-> **Under active development.** Core reachability, owned-app permission weighting, tenant-wide ranking, and HTML reports work. Transitive escalation and real-tenant scaling are next.
+> ## 🚧 Under Active Development
+> 
+> Core reachability, owned-app permission weighting, tenant-wide ranking, and HTML reports work. Transitive escalation and real-tenant scaling are next.
 
 Given an Entra ID identity, compute the complete set of everything it can reach and rank it by the worst privilege at the end. Run it for one identity, or rank every identity in the tenant by blast radius.
 
