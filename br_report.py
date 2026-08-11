@@ -84,8 +84,8 @@ h2.section { font-size: 1.1rem; margin: 2rem 0 .9rem; padding-bottom: .35rem; bo
 .rank-card.crit .rank-verdict { color: #7f1d1d; font-weight: 600; }
 .expand-hint { font-size: .75rem; color: var(--muted); opacity: 0.6; transition: opacity .15s; margin-left: auto; }
 .rank-card.open .expand-hint { display: none; }
-.chev { color: var(--muted); transition: transform .15s; font-size: 1.1rem; }
-.rank-card.open .chev { transform: rotate(90deg); }
+.chev { color: #334155; transition: transform .15s; font-size: 1.4rem; font-weight: 700; }
+.rank-card.open .chev { transform: rotate(90deg); color: var(--active-tab); }
 .rank-detail { display: none; padding: .3rem 1.2rem 1.2rem; border-top: 1px solid var(--border); }
 .rank-card.open .rank-detail { display: block; }
 .dsection { font-size: .95rem; margin: 1.1rem 0 .6rem; color: var(--muted); }
@@ -209,7 +209,7 @@ def render_html(result, output_path="blast_radius_report.html"):
     return output_path
 
 
-def render_tenant(results, total, output_path="blast_radius_tenant.html"):
+def render_tenant(results, total, output_path="blast_radius_tenant.html", tenant_id=None):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     crit_count = sum(1 for r in results if r.get("overall_tier", 9) == 0)
 
@@ -230,19 +230,21 @@ def render_tenant(results, total, output_path="blast_radius_tenant.html"):
                   '</div>')
 
     high_count = sum(1 for r in results if r.get("overall_tier", 9) == 1)
+    tenant_line = ('<p class="subtitle" style="font-size:.85rem">Tenant &#8230;' + escape(tenant_id[-12:]) + '</p>') if tenant_id else ""
 
     html = ("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<title>Tenant Blast Radius</title>"
             "<style>" + _CSS + "</style></head><body>"
             "<div class=\"header\"><div class=\"header-inner\">"
             "<h1>Tenant Blast Radius</h1>"
-            "<p class=\"subtitle\">Top " + str(len(results)) + " most dangerous identities of " + str(total) + " users</p>"
+            "<p class=\"subtitle\">Top " + str(len(results)) + " highest blast radius of " + str(total) + " users</p>"
+            + tenant_line +
             "<p class=\"ts\">" + ts + "</p>"
             "</div></div>"
             "<main>"
             "<div class=\"stats\">"
-            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--crit)\">" + str(crit_count) + "</span><span class=\"l\">Critical</span></div>"
-            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--high)\">" + str(high_count) + "</span><span class=\"l\">High</span></div>"
+            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--crit)\">" + str(crit_count) + "</span><span class=\"l\">Critical Identities</span></div>"
+            "<div class=\"stat\"><span class=\"n\" style=\"color:var(--high)\">" + str(high_count) + "</span><span class=\"l\">High Identities</span></div>"
             "<div class=\"stat\"><span class=\"n\">" + str(len(results)) + "</span><span class=\"l\">Shown</span></div>"
             "<div class=\"stat\"><span class=\"n\">" + str(total) + "</span><span class=\"l\">Total Users</span></div>"
             "</div>"
@@ -258,7 +260,11 @@ def render_tenant(results, total, output_path="blast_radius_tenant.html"):
             "</div>"
             "<div style=\"text-align:center;color:var(--text);font-size:.9rem;font-weight:600;margin:0 0 1.2rem\">&#9662; Click any card to expand its full reachable set</div>"
             + cards
-            + "</main></body></html>")
+            + "<div style=\"margin-top:2rem;padding-top:1rem;border-top:1px solid var(--border);font-size:.8rem;color:var(--muted);line-height:1.5\">"
+            "<strong>Scope:</strong> Direct role assignments, nested group memberships, PIM-eligible roles, and owned application permissions. "
+            "Does not yet cover transitive escalation, Azure resource (ARM) RBAC, group/SP ownership, or PIM-for-groups."
+            "</div>"
+            "</main></body></html>")
 
     with open(output_path, "w") as f:
         f.write(html)

@@ -98,6 +98,7 @@ class BlastRadius:
         self.credential = None
         self.client = None
         self.access_token = None
+        self.tenant_id = None
         # caches so tenant-wide runs don't re-fetch shared data per user
         self._group_roles_cache = {}   # group_id -> [role dicts]
         self._app_perms_cache = {}     # app_id  -> {tier0, tier1, worst}
@@ -109,6 +110,15 @@ class BlastRadius:
         self.client = GraphServiceClient(credentials=self.credential, scopes=self.SCOPES)
         token = self.credential.get_token("https://graph.microsoft.com/.default")
         self.access_token = token.token
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get("https://graph.microsoft.com/v1.0/organization?$select=id",
+                                 headers={"Authorization": f"Bearer {self.access_token}"}) as r:
+                    if r.status == 200:
+                        data = await r.json()
+                        self.tenant_id = data["value"][0]["id"]
+        except Exception:
+            pass
         print(f"{Fore.GREEN}Connected.{Style.RESET_ALL}")
 
     # --- resolve the starting principal (UPN or object id) ---
@@ -546,7 +556,7 @@ async def main():
         _print_tenant(results, total)
         if "--html" in flags:
             from br_report import render_tenant
-            out = render_tenant(results, total)
+            out = render_tenant(results, total, tenant_id=br.tenant_id)
             print(f"\nHTML report written to {out}")
         return
 
