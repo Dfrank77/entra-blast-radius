@@ -30,11 +30,45 @@ Tenant-wide mode ranks every identity by blast radius, worst-first, and lets you
 
 ![Tenant blast radius](docs/tenant_blast_radius.jpeg)
 
-## Usage
+## Setup
 
-```
+Requires Python 3.10+ and an Entra ID tenant.
+
+```bash
+git clone https://github.com/Dfrank77/entra-blast-radius.git
+cd entra-blast-radius
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### App Registration
+
+Register an app in your Entra tenant (**App registrations > New registration**):
+
+1. Set a redirect URI of type **Mobile and desktop applications** to `http://localhost`.
+2. Under **API permissions**, add the following Microsoft Graph **delegated** permissions:
+
+| Permission | Why |
+|---|---|
+| User.Read.All | Read all user profiles |
+| Group.Read.All | Read all group memberships |
+| Directory.Read.All | Read directory data |
+| RoleManagement.Read.All | Read role assignments |
+| RoleManagement.Read.Directory | Read directory role definitions |
+| RoleEligibilitySchedule.Read.Directory | Read PIM eligible role assignments |
+| Application.Read.All | Read application registrations and service principal permissions |
+
+3. Grant admin consent for the tenant.
+4. Copy the **Application (client) ID** from the app's Overview page.
+5. Copy `.env.example` to `.env` and paste the client ID:
+
+```bash
+cp .env.example .env
+# edit .env with your CLIENT_ID
+```
+
+## Usage
 
 Single identity:
 
@@ -49,8 +83,6 @@ Tenant-wide (rank every identity, worst-first):
 python blast_radius.py --tenant                    # top 10, console
 python blast_radius.py --tenant --top=25 --html    # top 25, collapsible HTML
 ```
-
-Authenticates interactively (browser sign-in) using delegated read permissions.
 
 ## Scope and honesty
 

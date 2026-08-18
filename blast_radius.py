@@ -23,12 +23,15 @@ thing called out as the headline.
 import asyncio
 import base64
 import json as _json
+import os
 
 import aiohttp
 from azure.identity import InteractiveBrowserCredential
 from msgraph import GraphServiceClient
 from colorama import Fore, Style, init
+from dotenv import load_dotenv
 
+load_dotenv()
 init(autoreset=True)
 
 
@@ -92,9 +95,11 @@ class BlastRadius:
         "RoleEligibilitySchedule.Read.Directory",
         "Application.Read.All",
     ]
-    CLIENT_ID = "7be5ba65-ddcd-4ae9-bf94-747a6e38e9ad"
-
     def __init__(self):
+        self.CLIENT_ID = os.environ.get("CLIENT_ID")
+        if not self.CLIENT_ID:
+            print(f"{Fore.RED}CLIENT_ID not set. Copy .env.example to .env and fill in your app registration client ID.{Style.RESET_ALL}")
+            raise SystemExit(1)
         self.credential = None
         self.client = None
         self.access_token = None
