@@ -100,3 +100,11 @@ This tool covers the reachability edges listed above. It does **not** yet follow
 ## Part of a suite
 
 Built alongside [entra-attack-path-visualizer](https://github.com/Dfrank77/entra-attack-path-visualizer) and the [entra-orchestrator](https://github.com/Dfrank77/entra-orchestrator) correlation suite.
+
+## Author
+
+**Darius Frank** — IAM & Cloud Security
+
+- Portfolio: [dfrank-iam.com](https://dfrank-iam.com)
+- GitHub: [@Dfrank77](https://github.com/Dfrank77)
+- LinkedIn: [Darius Frank](https://www.linkedin.com/in/darius-frank-24a895192/)
